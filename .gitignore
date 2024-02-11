@@ -33,4 +33,7 @@
 
 bin/*
 tests/outputs/*
-tests/inputs_generated/*
+tests/inputs 
+
+# Custom client process
+src/serial/client.cpp
