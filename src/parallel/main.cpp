@@ -7,18 +7,34 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unordered_map>
+#include <queue>
 
 using namespace std;
 
-pthread_mutex_t lock;
+// Define number of worker threads
+const int num_threads = 10;
+
+// Queue for storing active clients
+queue<int> clients;
+
+// Shared Key-value datastore
+unordered_map<string, string> KV_DATASTORE;
+
+// Define mutex locks for map access and queue access
+pthread_mutex_t map_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // Handle individual client connections
-void* handleConnection(void *);
+void handleConnection(int);
+
+// Thread routine
+void* startRoutine(void *);
 
 // Create and configure server socket
 int getServerSocket(const int &port);
 
-unordered_map<string, string> KV_DATASTORE;
+// Add new client connection to queue
+void addToQueue(int client_fd);
 
 int main(int argc, char **argv)
 {
@@ -55,16 +71,27 @@ int main(int argc, char **argv)
 	cout << "Server listening on port: " << port << endl;
 
 
-	// Initialize mutex lock
-	if (pthread_mutex_init(&lock, NULL) != 0) { 
-        printf("\n mutex init has failed\n"); 
-        return 1; 
-  	} 
+	// // Initialize mutex lock
+	// if (pthread_mutex_init(&map_lock, NULL) != 0) { 
+    //     printf("\n mutex init has failed\n"); 
+    //     return 1; 
+  	// } 
+
+	// // Initialize mutex lock
+	// if (pthread_mutex_init(&queue_lock, NULL) != 0) { 
+    //     printf("\n mutex init has failed\n"); 
+    //     return 1; 
+  	// } 
 
 	sockaddr_in client_addr;
 	socklen_t caddr_len = sizeof(client_addr);
 
-	vector<pthread_t> thread_ids;
+	vector<pthread_t> thread_ids(num_threads);
+
+	// Create worker threads
+	for(int i = 0; i < num_threads; i++) {
+		pthread_create(&thread_ids[i], NULL, &startRoutine, NULL);
+	}
 
 	while (true)
 	{
@@ -75,22 +102,18 @@ int main(int argc, char **argv)
 			cerr << "Error: Couldn't accept connection" << endl;
 			exit(1);
 		}
-
-		pthread_t thread_id;
-		
-		// Spawn thread for each new client (connection)
-		pthread_create(&thread_id, NULL, &handleConnection, (void *)&client_fd);
-		
-		// Add thread ID to vector
-		thread_ids.push_back(thread_id);
+		// Add new connection to clients queue
+		addToQueue(client_fd);
 	}
 
-	for( pthread_t tid : thread_ids ) {
-		pthread_join( tid, NULL);
-	}
+	// ## CHECK
+	// for( pthread_t tid : thread_ids ) {
+	// 	pthread_join( tid, NULL);
+	// }
 	
 	// Destroy mutex lock
-	pthread_mutex_destroy(&lock);
+	pthread_mutex_destroy(&map_lock);
+	pthread_mutex_destroy(&queue_lock);
 
 	// Close socket
 	close(server_fd);
@@ -137,23 +160,55 @@ int getServerSocket(const int &port)
 	return server_fd;
 }
 
-void* handleConnection(void* arg)
-{
-	/* 	Handle Individual client connections and process
-		and respond to messages sent by the client.
+void addToQueue(int client_fd) {
+	/* 	Add client_fd to clients queue */
+
+	// Acquire lock before pushing client descriptor onto queue
+	pthread_mutex_lock(&queue_lock);
+	clients.push(client_fd);
+	pthread_mutex_unlock(&queue_lock);
+}
+
+void* startRoutine(void *) {
+	/* 	Start routine for worker threads.
+		Pops client_fd from queue and calls client handler function.
 	*/
 
 	// Detach current thread from calling thread
 	pthread_detach(pthread_self());
+
+	bool run = true;
+	while( run ) {
+			int client_fd;
+
+			// Acquire queue_lock before accessing clients queue
+			pthread_mutex_lock(&queue_lock);
+			if(!clients.empty()) {
+				client_fd = clients.front();
+				clients.pop();
+				// Release lock
+				pthread_mutex_unlock(&queue_lock);
+
+				// Call handler function for popped client
+				handleConnection(client_fd);
+			} else {
+				// Release lock
+				pthread_mutex_unlock(&queue_lock);
+			}
+	}
+	pthread_exit(NULL);
+}
+void handleConnection(int client_fd)
+{
+	/* 	Handle Individual client connections and process
+		and respond to messages sent by the client.
+	*/
 
 	// Buffer to read in messages from client
 	char buffer[1024];
 	bool end = false;
 	string response;
 	string key, value;
-
-	int *ptr = (int*) arg;
-	int client_fd = *ptr;
 
 	// Until client sends END message
 	while (!end)
@@ -183,7 +238,7 @@ void* handleConnection(void* arg)
 
 					getline(strm, key);
 
-					pthread_mutex_lock(&lock);
+					pthread_mutex_lock(&map_lock);
 					// Check for presence of key
 					if (KV_DATASTORE.find(key) != KV_DATASTORE.end())
 					{
@@ -194,7 +249,7 @@ void* handleConnection(void* arg)
 						// Return NULL if key not present
 						response = "NULL\n";
 					}
-					pthread_mutex_unlock(&lock);
+					pthread_mutex_unlock(&map_lock);
 
 				}
 				else if (query == "WRITE")
@@ -207,20 +262,20 @@ void* handleConnection(void* arg)
 					// Strip colon
 					value = value.substr(1);
 
-					pthread_mutex_lock(&lock);
+					pthread_mutex_lock(&map_lock);
 
 					KV_DATASTORE[key] = value;
 					response = "FIN\n";
 
-					pthread_mutex_unlock(&lock);
+					pthread_mutex_unlock(&map_lock);
 
 				}
 				else if (query == "COUNT")
 				{
 					// COUNT query
-					pthread_mutex_lock(&lock);
+					pthread_mutex_lock(&map_lock);
 					response = to_string(KV_DATASTORE.size()) + "\n";
-					pthread_mutex_unlock(&lock);
+					pthread_mutex_unlock(&map_lock);
 
 				}
 				else if (query == "DELETE")
@@ -230,7 +285,7 @@ void* handleConnection(void* arg)
 					getline(strm, key);
 					int count = 0;
 
-					pthread_mutex_lock(&lock);
+					pthread_mutex_lock(&map_lock);
 					// Check for presence of key
 					if (KV_DATASTORE.find(key) != KV_DATASTORE.end())
 					{
@@ -242,7 +297,7 @@ void* handleConnection(void* arg)
 						// Return NULL if key not present
 						response = "NULL\n";
 					}
-					pthread_mutex_unlock(&lock);
+					pthread_mutex_unlock(&map_lock);
 
 				}
 				else if (query == "END")
@@ -263,5 +318,4 @@ void* handleConnection(void* arg)
 		}
 	}
 	int res = close(client_fd);
-	pthread_exit(NULL);
 }
