@@ -12,9 +12,9 @@
 using namespace std;
 
 // Define number of worker threads
-const int num_threads = 10;
+const int num_threads = 5;
 
-// Queue for storing active clients
+// Queue for storing active and waiting clients
 queue<int> clients;
 
 // Shared Key-value datastore
@@ -70,19 +70,6 @@ int main(int argc, char **argv)
 
 	cout << "Server listening on port: " << port << endl;
 
-
-	// // Initialize mutex lock
-	// if (pthread_mutex_init(&map_lock, NULL) != 0) { 
-    //     printf("\n mutex init has failed\n"); 
-    //     return 1; 
-  	// } 
-
-	// // Initialize mutex lock
-	// if (pthread_mutex_init(&queue_lock, NULL) != 0) { 
-    //     printf("\n mutex init has failed\n"); 
-    //     return 1; 
-  	// } 
-
 	sockaddr_in client_addr;
 	socklen_t caddr_len = sizeof(client_addr);
 
@@ -105,13 +92,8 @@ int main(int argc, char **argv)
 		// Add new connection to clients queue
 		addToQueue(client_fd);
 	}
-
-	// ## CHECK
-	// for( pthread_t tid : thread_ids ) {
-	// 	pthread_join( tid, NULL);
-	// }
 	
-	// Destroy mutex lock
+	// Destroy mutex locks
 	pthread_mutex_destroy(&map_lock);
 	pthread_mutex_destroy(&queue_lock);
 
@@ -177,6 +159,7 @@ void* startRoutine(void *) {
 	// Detach current thread from calling thread
 	pthread_detach(pthread_self());
 
+	cout << "Thread ID: " << pthread_self() << " -> Listening to queue." << endl;
 	bool run = true;
 	while( run ) {
 			int client_fd;
@@ -198,6 +181,7 @@ void* startRoutine(void *) {
 	}
 	pthread_exit(NULL);
 }
+
 void handleConnection(int client_fd)
 {
 	/* 	Handle Individual client connections and process
@@ -209,6 +193,8 @@ void handleConnection(int client_fd)
 	bool end = false;
 	string response;
 	string key, value;
+
+	cout << client_fd << " pulled from queue by " << pthread_self() << endl;
 
 	// Until client sends END message
 	while (!end)
