@@ -12,7 +12,7 @@
 using namespace std;
 
 // Define number of worker threads
-const int num_threads = 5;
+const int num_threads = 10;
 
 // Queue for storing active and waiting clients
 queue<int> clients;
@@ -23,6 +23,9 @@ unordered_map<string, string> KV_DATASTORE;
 // Define mutex locks for map access and queue access
 pthread_mutex_t map_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// Condition variable for checking if queue empty
+pthread_cond_t queue_not_empty = PTHREAD_COND_INITIALIZER;
 
 // Handle individual client connections
 void handleConnection(int);
@@ -149,6 +152,9 @@ void addToQueue(int client_fd) {
 	pthread_mutex_lock(&queue_lock);
 	clients.push(client_fd);
 	pthread_mutex_unlock(&queue_lock);
+
+	// Unblock one thread that is blocked on the condition variable
+	pthread_cond_signal(&queue_not_empty);
 }
 
 void* startRoutine(void *) {
@@ -160,25 +166,35 @@ void* startRoutine(void *) {
 	pthread_detach(pthread_self());
 
 	cout << "Thread ID: " << pthread_self() << " -> Listening to queue." << endl;
-	bool run = true;
-	while( run ) {
-			int client_fd;
+	
+	while(true) {
+        int client_fd = -1;
 
-			// Acquire queue_lock before accessing clients queue
-			pthread_mutex_lock(&queue_lock);
-			if(!clients.empty()) {
-				client_fd = clients.front();
-				clients.pop();
-				// Release lock
-				pthread_mutex_unlock(&queue_lock);
+		// Acquire queue_lock before accessing clients queue
+        pthread_mutex_lock(&queue_lock);
 
-				// Call handler function for popped client
-				handleConnection(client_fd);
-			} else {
-				// Release lock
-				pthread_mutex_unlock(&queue_lock);
-			}
-	}
+        // Wait until clients queue is not empty
+        while (clients.empty()) {
+			// cout << "Thread ID: " << pthread_self() << " -> blocked." << endl;
+            pthread_cond_wait(&queue_not_empty, &queue_lock);
+        }
+
+		// cout << "Thread ID: " << pthread_self() << " -> unblocked." << endl;
+
+		client_fd = clients.front();
+		clients.pop();
+
+		// Release lock
+        pthread_mutex_unlock(&queue_lock);
+
+
+        // Check if client_fd is valid before handling the connection
+        if (client_fd != -1) {
+			// Call handler function for popped client
+            handleConnection(client_fd);
+        }
+    }
+
 	pthread_exit(NULL);
 }
 
@@ -194,7 +210,7 @@ void handleConnection(int client_fd)
 	string response;
 	string key, value;
 
-	cout << client_fd << " pulled from queue by " << pthread_self() << endl;
+	// cout << client_fd << " pulled from queue by " << pthread_self() << endl;
 
 	// Until client sends END message
 	while (!end)
