@@ -47,8 +47,6 @@ int main(int argc, char **argv)
 	sockaddr_in client_addr;
 	socklen_t caddr_len = sizeof(client_addr);
 
-	int client_fd;
-
 	while (true)
 	{
 		// Await a connection on socket FD.
