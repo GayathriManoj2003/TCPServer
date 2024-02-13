@@ -124,6 +124,14 @@ int getServerSocket(const int &port)
 		return -1;
 	}
 
+	// Set SO_REUSEADDR option
+    int opt = 1;
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        cerr << "Error: setsockopt(SO_REUSEADDR) failed" << endl;
+        close(server_fd);
+        return -1;
+    }
+	
 	// Structure to store configuration details
 	struct sockaddr_in server_addr;
 	socklen_t saddr_len = sizeof(server_addr);
